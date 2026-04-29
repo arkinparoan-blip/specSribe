@@ -209,7 +209,7 @@
           const logProjectActivity = async (type, detail) => {
             if (!user || !currentProjectId) return;
             try {
-              const historyRef = collection(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'history');
+              const historyRef = collection(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'history');
               await addDoc(historyRef, {
                 timestamp: serverTimestamp(),
                 userName: getUserIdentity(),
@@ -221,14 +221,14 @@
 
           const updateModuleData = async (mid, updates, auditType = 'Technical Update') => {
             if (!user || !currentProjectId) return;
-            const mRef = doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'modules', mid);
+            const mRef = doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'modules', mid);
             const activeModule = (modules || []).find(m => m.id === mid);
             
             if (updates.result || updates.name || updates.inputText) {
               const before = updates.result ? activeModule?.result : (updates.name ? activeModule?.name : activeModule?.inputText);
               const after = updates.result ? updates.result : (updates.name ? updates.name : updates.inputText);
               
-              const historyRef = collection(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'modules', mid, 'revisions');
+              const historyRef = collection(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'modules', mid, 'revisions');
               await addDoc(historyRef, {
                 timestamp: serverTimestamp(),
                 userName: getUserIdentity(),
@@ -239,7 +239,7 @@
             }
 
             await updateDoc(mRef, { ...updates, updatedAt: serverTimestamp(), updatedBy: getUserIdentity() });
-            await updateDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId), { updatedAt: serverTimestamp(), updatedBy: getUserIdentity() });
+            await updateDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId), { updatedAt: serverTimestamp(), updatedBy: getUserIdentity() });
           };
 
           // --- 5. Core Actions ---
@@ -272,7 +272,7 @@
             }
             const id = crypto.randomUUID();
             try {
-              await setDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', id), { name, createdAt: new Date().toISOString(), updatedAt: serverTimestamp(), createdBy: getUserIdentity(), updatedBy: getUserIdentity(), isDeleted: false, status: 'active' });
+              await setDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', id), { name, createdAt: new Date().toISOString(), updatedAt: serverTimestamp(), createdBy: getUserIdentity(), updatedBy: getUserIdentity(), isDeleted: false, status: 'active' });
               setNewProjectName(""); setIsCreatingProject(false); openProject(id);
             } catch (err) { setError("Failed to create project."); }
           };
@@ -282,7 +282,7 @@
             const id = crypto.randomUUID();
             const name = newModuleName.trim();
             try {
-              await setDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'modules', id), { name, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), createdBy: getUserIdentity(), updatedBy: getUserIdentity(), inputText: "", result: null, fileName: "" });
+              await setDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'modules', id), { name, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), createdBy: getUserIdentity(), updatedBy: getUserIdentity(), inputText: "", result: null, fileName: "" });
               await logProjectActivity('Module Created', `Added module: ${name}`);
               setNewModuleName(""); setIsCreatingModule(false); setActiveModuleId(id); setWorkspaceTab('editor');
             } catch (err) { setError("Failed to create module."); }
@@ -294,7 +294,7 @@
             const m = (modules || []).find(item => item.id === moduleId);
             try {
               await logProjectActivity('Module Deleted', `Deleted module: ${m?.name || moduleId}`);
-              await deleteDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'modules', moduleId));
+              await deleteDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'modules', moduleId));
               if (activeModuleId === moduleId) setActiveModuleId(null);
             } catch (err) { setError("Failed to delete module."); }
           };
@@ -302,7 +302,7 @@
           const saveProjectName = async (id) => {
             if (!tempProjectName.trim()) { setEditingProjectId(null); return; }
             await logProjectActivity('Project Renamed', `Changed project name to: ${tempProjectName}`);
-            await updateDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', id), { name: tempProjectName.trim(), updatedAt: serverTimestamp(), updatedBy: getUserIdentity() });
+            await updateDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', id), { name: tempProjectName.trim(), updatedAt: serverTimestamp(), updatedBy: getUserIdentity() });
             setEditingProjectId(null);
           };
 
@@ -315,19 +315,19 @@
           const softDeleteProject = async (id, e) => {
             if (e) e.stopPropagation();
             if (!user) return;
-            try { await updateDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', id), { isDeleted: true, deletedAt: serverTimestamp(), deletedBy: getUserIdentity() }); } catch (err) { setError("Failed to move to bin."); }
+            try { await updateDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', id), { isDeleted: true, deletedAt: serverTimestamp(), deletedBy: getUserIdentity() }); } catch (err) { setError("Failed to move to bin."); }
           };
 
           const restoreProject = async (id, e) => {
             if (e) e.stopPropagation();
             if (!user) return;
-            try { await updateDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', id), { isDeleted: false, deletedAt: null }); } catch (err) { setError("Failed to restore."); }
+            try { await updateDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', id), { isDeleted: false, deletedAt: null }); } catch (err) { setError("Failed to restore."); }
           };
 
           const hardDeleteProject = async (id, e) => {
             if (e) e.stopPropagation();
             if (!user) return;
-            try { await deleteDoc(doc(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', id)); } catch (err) { setError("Failed to delete permanently."); }
+            try { await deleteDoc(doc(db, 'artifacts', activeAppId, 'public', 'data', 'projects', id)); } catch (err) { setError("Failed to delete permanently."); }
           };
 
           const startEditingBlueprint = () => {
@@ -560,7 +560,7 @@
 
           useEffect(() => {
             if (!user) return;
-            const projectsRef = collection(db, 'artifacts', activeAppId, 'users', user.uid, 'projects');
+            const projectsRef = collection(db, 'artifacts', activeAppId, 'public', 'data', 'projects');
             return onSnapshot(projectsRef, (snapshot) => {
               const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
               setProjects(list.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0)));
@@ -569,8 +569,8 @@
 
           useEffect(() => {
             if (!user || !currentProjectId) return;
-            const modulesRef = collection(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'modules');
-            const pHistoryRef = collection(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'history');
+            const modulesRef = collection(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'modules');
+            const pHistoryRef = collection(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'history');
             
             const unsubModules = onSnapshot(modulesRef, (snapshot) => {
               const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -587,7 +587,7 @@
 
           useEffect(() => {
             if (!user || !currentProjectId || !activeModuleId) { setRevisions([]); return; }
-            const historyRef = collection(db, 'artifacts', activeAppId, 'users', user.uid, 'projects', currentProjectId, 'modules', activeModuleId, 'revisions');
+            const historyRef = collection(db, 'artifacts', activeAppId, 'public', 'data', 'projects', currentProjectId, 'modules', activeModuleId, 'revisions');
             return onSnapshot(historyRef, (snapshot) => {
               const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
               setRevisions(list.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
@@ -804,6 +804,7 @@
                             <>
                               <h3 className="text-sm font-bold truncate">{String(p.name)}</h3>
                               <p className="text-[9px] text-slate-400 mt-2 font-black tracking-wider flex items-center gap-1 uppercase opacity-70"><History size={8} /> {formatDate(p.updatedAt)}</p>
+                              <p className="text-[10px] text-indigo-500 mt-2 font-bold truncate">Created by {String(p.createdBy || 'Unknown')}</p>
                             </>
                           )}
                         </div>
