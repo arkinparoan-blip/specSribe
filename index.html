@@ -63,7 +63,10 @@
         // AI ACCESS KEY & STANDARD MODEL
         const GEMINI_API_KEY = "AIzaSyD6gYk1fJItGeU9ih3AhTMp1a3IHBlHvZo"; 
         const activeApiKey = isCanvas ? "" : GEMINI_API_KEY; 
-        const MODEL_NAME = isCanvas ? "gemini-2.5-flash-preview-09-2025" : "gemini-2.5-flash"; 
+        
+        // Changed fallback model from 2.5 to 1.5 to prevent 403 Forbidden errors on standard API keys
+        const MODEL_NAME = isCanvas ? "gemini-2.5-flash-preview-09-2025" : "gemini-1.5-flash"; 
+        
         const activeAppId = isCanvas && typeof __app_id !== 'undefined' ? __app_id : 'spec-scribe-app';
 
         // Initialize Services
@@ -354,6 +357,9 @@
                     await new Promise(r => setTimeout(r, delay));
                     return callAiWithRetry(attempt + 1);
                   }
+                  if (response.status === 403) {
+                      throw new Error("AI Gateway Error (403): Your API Key does not have permission. Check Google Cloud Console API restrictions.");
+                  }
                   throw new Error(`AI Gateway Error (${response.status})`);
                 }
 
@@ -369,7 +375,7 @@
                   throw new Error("AI output was not in the correct JSON format.");
                 }
               } catch (err) {
-                if (attempt < 5) {
+                if (attempt < 5 && !err.message.includes("403")) {
                   const delay = Math.pow(2, attempt) * 1000;
                   await new Promise(r => setTimeout(r, delay));
                   return callAiWithRetry(attempt + 1);
@@ -1046,6 +1052,7 @@
                                                 </div>
                                             </div>
                                         ))}
+                                        {diffs.length === 0 && <div className="text-slate-400 italic text-[10px]">Structural or metadata update detected.</div>}
                                         </div>
                                     </div>
                                     );
