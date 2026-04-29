@@ -161,7 +161,9 @@ Output must be ONLY a valid JSON object.`;
           };
 
           const getEffectiveModel = () => {
-              if (isCanvas) return "gemini-2.5-flash-preview-09-2025";
+              // If in Canvas AND using the default injected key, force the Canvas-compatible model
+              if (isCanvas && !customApiKey) return "gemini-2.5-flash-preview-09-2025";
+              // Otherwise, respect the user's explicit model choice
               return (customModel || "gemini-1.5-flash").trim();
           };
           
@@ -368,6 +370,7 @@ Output must be ONLY a valid JSON object.`;
                     return callAiWithRetry(attempt + 1);
                   }
                   if (response.status === 400 || response.status === 403 || response.status === 404) {
+                      setModalError(`API Error (${response.status}): ${errPayload?.error?.message || 'Model may not support JSON mode or is invalid.'}`);
                       setShowApiModal(true);
                       throw new Error(`API Key or Model invalid (${response.status}). Details: ${errPayload?.error?.message || 'Check model version or key'}`);
                   }
@@ -388,10 +391,10 @@ Output must be ONLY a valid JSON object.`;
                   setActiveSpecIndex(0); 
                   setWorkspaceTab('blueprint');
                 } else {
-                  throw new Error("AI output was not in the expected JSON format. Please refine the text and try again.");
+                  throw new Error("AI output was not in the expected JSON format. The selected Lite model may not support structured output. Please refine the text or change models.");
                 }
               } catch (err) {
-                if (attempt < 5 && !err.message.includes("API Key") && !err.message.includes("Safety") && !err.message.includes("format") && !err.message.includes("invalid")) {
+                if (attempt < 5 && !err.message.includes("API Key") && !err.message.includes("API Error") && !err.message.includes("Safety") && !err.message.includes("format") && !err.message.includes("invalid")) {
                   const delay = Math.pow(2, attempt) * 1000;
                   await new Promise(r => setTimeout(r, delay));
                   return callAiWithRetry(attempt + 1);
@@ -452,6 +455,7 @@ Output must be ONLY a valid JSON object.`;
                           return callAiWithRetry(attempt + 1);
                       }
                       if (res.status === 400 || res.status === 403 || res.status === 404) {
+                          setModalError(`API Error (${res.status}): ${errPayload?.error?.message || 'Model may not support JSON mode.'}`);
                           setShowApiModal(true);
                           throw new Error("Invalid API Key or Model access denied.");
                       }
@@ -510,6 +514,7 @@ Output must be ONLY a valid JSON object.`;
                           return callAiWithRetry(attempt + 1);
                       }
                       if (res.status === 400 || res.status === 403 || res.status === 404) {
+                          setModalError(`API Error (${res.status}): ${errPayload?.error?.message || 'Model access denied.'}`);
                           setShowApiModal(true);
                           throw new Error("Invalid API Key or Model access denied.");
                       }
