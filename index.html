@@ -63,9 +63,6 @@
             };
 
         const GEMINI_API_KEY = "AIzaSyD6gYk1fJItGeU9ih3AhTMp1a3IHBlHvZo"; 
-        
-        // Changed fallback model to 1.5-flash to prevent 404 Model Not Found errors on standard API keys
-        const MODEL_NAME = isCanvas ? "gemini-2.5-flash-preview-09-2025" : "gemini-1.5-flash"; 
         const activeAppId = isCanvas && typeof __app_id !== 'undefined' ? __app_id : 'spec-scribe-app';
 
         const app = initializeApp(firebaseConfig);
@@ -143,7 +140,10 @@ Output must be ONLY a valid JSON object.`;
           const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
           const [isDraggingExplorer, setIsDraggingExplorer] = useState(false);
           const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0 });
+          
+          // API Key and Model configuration
           const [customApiKey, setCustomApiKey] = useState(() => localStorage.getItem('specscribe_gemini_key') || '');
+          const [customModel, setCustomModel] = useState(() => localStorage.getItem('specscribe_gemini_model') || 'gemini-2.5-flash');
           const [showApiModal, setShowApiModal] = useState(false);
 
           const fileInputRef = useRef(null);
@@ -155,6 +155,11 @@ Output must be ONLY a valid JSON object.`;
               if (customApiKey) return customApiKey;
               if (isCanvas) return ""; 
               return GEMINI_API_KEY;
+          };
+
+          const getEffectiveModel = () => {
+              if (isCanvas) return "gemini-2.5-flash-preview-09-2025";
+              return customModel || "gemini-2.5-flash";
           };
           
           const getUserIdentity = () => String(user?.displayName || user?.email || user?.uid || 'Anonymous');
@@ -297,6 +302,8 @@ Output must be ONLY a valid JSON object.`;
             if (!activeModuleData || !activeModuleData.inputText.trim()) return;
             
             const keyToUse = getEffectiveApiKey();
+            const modelToUse = getEffectiveModel();
+            
             if (!keyToUse) {
                 setShowApiModal(true);
                 return;
@@ -308,7 +315,7 @@ Output must be ONLY a valid JSON object.`;
               try {
                 const promptContext = `MODULE CONTEXT: Analyzing "${activeModuleData.name}". Extract technical requirements strictly for this scope. Text: ${sanitizeInput(activeModuleData.inputText)}`;
 
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${keyToUse}`, {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${keyToUse}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ 
@@ -329,7 +336,7 @@ Output must be ONLY a valid JSON object.`;
                   }
                   if (response.status === 400 || response.status === 403 || response.status === 404) {
                       setShowApiModal(true);
-                      throw new Error(`API Key or Model invalid (${response.status}). Details: ${errPayload?.error?.message || 'Check Console'}`);
+                      throw new Error(`API Key or Model invalid (${response.status}). Details: ${errPayload?.error?.message || 'Check model version or key'}`);
                   }
                   throw new Error(`AI Gateway Error (${response.status}): ${errPayload?.error?.message || 'Unknown network error'}`);
                 }
@@ -351,7 +358,7 @@ Output must be ONLY a valid JSON object.`;
                   throw new Error("AI output was not in the expected JSON format. Please refine the text and try again.");
                 }
               } catch (err) {
-                if (attempt < 5 && !err.message.includes("API Key") && !err.message.includes("Safety") && !err.message.includes("format")) {
+                if (attempt < 5 && !err.message.includes("API Key") && !err.message.includes("Safety") && !err.message.includes("format") && !err.message.includes("invalid")) {
                   const delay = Math.pow(2, attempt) * 1000;
                   await new Promise(r => setTimeout(r, delay));
                   return callAiWithRetry(attempt + 1);
@@ -386,6 +393,8 @@ Output must be ONLY a valid JSON object.`;
           const syncWithAi = async () => {
             if (!editBuffer) return;
             const keyToUse = getEffectiveApiKey();
+            const modelToUse = getEffectiveModel();
+            
             if (!keyToUse) { setShowApiModal(true); return; }
             setIsAiRefining(true);
             
@@ -394,7 +403,7 @@ Output must be ONLY a valid JSON object.`;
                   const currentSpec = editBuffer.specs?.[activeSpecIndex];
                   if (!currentSpec) return;
                   const prompt = `DEEP ANALYSIS: Refine JSON logic for the module. Context: ${currentSpec.details}`;
-                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${keyToUse}`, {
+                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${keyToUse}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" }})
@@ -442,6 +451,8 @@ Output must be ONLY a valid JSON object.`;
           const refineAiSpec = async () => {
             if (!aiRefinementInput.trim() || !editBuffer) return;
             const keyToUse = getEffectiveApiKey();
+            const modelToUse = getEffectiveModel();
+            
             if (!keyToUse) { setShowApiModal(true); return; }
             setIsAiRefining(true);
             
@@ -450,7 +461,7 @@ Output must be ONLY a valid JSON object.`;
                   const currentSpec = editBuffer.specs?.[activeSpecIndex];
                   if (!currentSpec) return;
                   const prompt = `Refine this functional specification: "${aiRefinementInput}". Return ONLY the refined text. Original: ${currentSpec.details}`;
-                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${keyToUse}`, {
+                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${keyToUse}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
@@ -1149,28 +1160,45 @@ Output must be ONLY a valid JSON object.`;
                       <div className="bg-white p-10 rounded-[3rem] shadow-2xl max-w-md w-full animate-in zoom-in-95">
                           <div className="flex items-center gap-3 mb-4 text-indigo-600">
                               <Key size={24} />
-                              <h3 className="text-xl font-black text-slate-800">API Gateway</h3>
+                              <h3 className="text-xl font-black text-slate-800">API Gateway Settings</h3>
                           </div>
                           <p className="text-xs text-slate-500 font-medium mb-6 leading-relaxed">
-                              Enter your Google Gemini API Key. Your key is stored securely in your browser's local storage and never leaves this session.
+                              Enter your Google Gemini credentials. Data is stored securely in your browser's local storage and never leaves this session.
                           </p>
-                          <input 
-                              type="password" 
-                              value={customApiKey} 
-                              onChange={e => setCustomApiKey(e.target.value)} 
-                              className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl mb-8 outline-none focus:ring-2 focus:ring-indigo-100 text-sm font-bold text-slate-800 shadow-inner" 
-                              placeholder="AIzaSy..." 
-                          />
+                          
+                          <div className="mb-4">
+                              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 block ml-1">Gemini API Key</label>
+                              <input 
+                                  type="password" 
+                                  value={customApiKey} 
+                                  onChange={e => setCustomApiKey(e.target.value)} 
+                                  className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-100 text-sm font-bold text-slate-800 shadow-inner" 
+                                  placeholder="AIzaSy..." 
+                              />
+                          </div>
+
+                          <div className="mb-8">
+                              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 block ml-1">Model Version</label>
+                              <input 
+                                  type="text" 
+                                  value={customModel} 
+                                  onChange={e => setCustomModel(e.target.value)} 
+                                  className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-100 text-sm font-bold text-slate-800 shadow-inner" 
+                                  placeholder="gemini-2.5-flash" 
+                              />
+                          </div>
+
                           <div className="flex justify-end gap-2">
                               <button onClick={() => setShowApiModal(false)} className="px-6 py-2 font-bold text-slate-400 hover:bg-slate-50 rounded-xl transition-colors">Cancel</button>
                               <button 
                                   onClick={() => {
                                       localStorage.setItem('specscribe_gemini_key', customApiKey); 
+                                      localStorage.setItem('specscribe_gemini_model', customModel); 
                                       setShowApiModal(false);
                                   }} 
                                   className="bg-indigo-600 text-white px-8 py-2 rounded-xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center gap-2"
                               >
-                                  <Save size={14} /> Save Key
+                                  <Save size={14} /> Save Configuration
                               </button>
                           </div>
                       </div>
