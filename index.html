@@ -533,6 +533,61 @@ Output must be ONLY a valid JSON object matching this EXACT structure:
             try { await callAiWithRetry(); } finally { setIsAiRefining(false); }
           };
 
+          const syncFlowchartWithAi = async () => {
+            if (!editBuffer) return;
+            const keyToUse = getEffectiveApiKey();
+            const modelToUse = getEffectiveModel();
+            
+            if (!keyToUse) { setShowApiModal(true); return; }
+            setIsAiRefining(true);
+            
+            const callAiWithRetry = async (attempt = 0) => {
+                try {
+                  const currentSpec = editBuffer.specs?.[activeSpecIndex];
+                  if (!currentSpec) return;
+                  const prompt = `Generate a Mermaid flowchart (graph TD) based strictly on this functional specification. Use double quotes for node labels (e.g., A["Start"]). Return ONLY the raw Mermaid code, no markdown formatting or explanations.\n\nSpecification:\n${currentSpec.details}`;
+                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${keyToUse}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1 }})
+                  });
+                  
+                  if (!res.ok) {
+                      const errPayload = await res.json().catch(() => ({}));
+                      const err = new Error(errPayload?.error?.message || "API Request Failed");
+                      err.status = res.status;
+                      throw err;
+                  }
+                  
+                  const data = await res.json();
+                  let mermaidCode = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                  if (mermaidCode) {
+                    // Safe backtick extraction to avoid Babel inline string literal errors
+                    mermaidCode = mermaidCode.replace(/`{3}(?:mermaid)?\s*([\s\S]*?)\s*`{3}/i, '$1').trim();
+                    const newBuffer = {...editBuffer};
+                    newBuffer.specs[activeSpecIndex].flowchart_mermaid = mermaidCode;
+                    setEditBuffer(newBuffer);
+                  }
+                } catch (err) {
+                    if (attempt < 5 && (err.status === 429 || (err.status >= 500 && err.status < 600) || !err.status)) {
+                        const delay = Math.pow(2, attempt) * 1000;
+                        await new Promise(r => setTimeout(r, delay));
+                        return callAiWithRetry(attempt + 1);
+                    }
+                    if (err.status === 503 || err.status === 500) {
+                        setModalError("Google AI servers are overloaded (Error 503). Please wait and try again.");
+                        setShowApiModal(true);
+                    } else if (err.status === 400 || err.status === 403 || err.status === 404) {
+                        setModalError(`API Error (${err.status}): ${err.message}`);
+                        setShowApiModal(true);
+                    }
+                    console.error("Flowchart Sync Error:", err);
+                }
+            };
+            
+            try { await callAiWithRetry(); } finally { setIsAiRefining(false); }
+          };
+
           const refineAiSpec = async () => {
             if (!aiRefinementInput.trim() || !editBuffer) return;
             const keyToUse = getEffectiveApiKey();
@@ -996,7 +1051,10 @@ Output must be ONLY a valid JSON object matching this EXACT structure:
                                                 {isEditingBlueprint && editBuffer?.specs?.[activeSpecIndex] ? (
                                                   <div className="space-y-8 animate-in zoom-in-95 duration-300 text-slate-700">
                                                      <div className="space-y-3">
-                                                        <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2 text-amber-600"><GitBranch size={12} /> Flowchart Logic (Mermaid)</h3>
+                                                        <div className="flex items-center justify-between">
+                                                          <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2 text-amber-600"><GitBranch size={12} /> Flowchart Logic (Mermaid)</h3>
+                                                          <button onClick={syncFlowchartWithAi} disabled={isAiRefining} className="text-[8px] font-black bg-slate-100 text-amber-600 px-2 py-1 rounded-lg border border-amber-100 flex items-center gap-1 hover:bg-amber-50 shadow-sm transition-all disabled:opacity-50">{isAiRefining ? <Loader2 size={10} className="animate-spin" /> : <IterationCcw size={10} />} SYNC AI</button>
+                                                        </div>
                                                         <textarea value={editBuffer.specs[activeSpecIndex].flowchart_mermaid || ""} onChange={(e) => updateEditSpec('flowchart_mermaid', e.target.value)} className="w-full h-32 p-4 bg-slate-900 text-emerald-400 border border-slate-700 rounded-xl outline-none font-mono text-[10px] leading-relaxed shadow-xl" />
                                                      </div>
 
