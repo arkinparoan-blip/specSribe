@@ -69,10 +69,32 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        const SYSTEM_PROMPT = `You are an Expert Systems Architect. Your goal is to scribe an exhaustive Technical Specification Blueprint. 
-CRITICAL: Focus strictly on the PROVIDED MODULE. Identify every requirement and business rule. 
-Generate a "flowchart_mermaid" string using 'graph TD'. Labels MUST be in double quotes: NodeID["Label"]. 
-Output must be ONLY a valid JSON object.`;
+        const SYSTEM_PROMPT = `You are an Expert Systems Architect. Your goal is to scribe an exhaustive Technical Specification Blueprint.
+
+CRITICAL INSTRUCTIONS:
+1. SCOPE: Focus strictly on the PROVIDED MODULE.
+2. EXHAUSTIVE EXTRACTION: Identify every requirement and business rule in the text.
+3. DATA MODELING: Precisely assign types, required status, and data sources.
+4. FLOWCHART SYNTAX: Generate a "flowchart_mermaid" string using 'graph TD'. 
+   - MANDATORY: Wrap labels in double quotes. Pattern: NodeID["Label Text"]
+5. ACCEPTANCE CRITERIA: Generate testable, specific conditions.
+
+Output must be ONLY a valid JSON object matching this EXACT structure:
+{
+  "project_summary": "Overall module objective summary",
+  "specs": [
+    {
+      "id": "unique-string",
+      "feature_name": "Name of the spec",
+      "details": "Thorough functional description",
+      "flowchart_mermaid": "graph TD\\nA[\\"Start\\"] --> B{\\"Decision?\\"}",
+      "data_fields": [
+        { "name": "field_name", "type": "string|number|boolean|date|dropdown|checkbox|radio", "notes": "...", "options": [], "condition": "", "source": "", "isRequired": false, "isEnabled": true }
+      ],
+      "acceptance_criteria": ["criteria 1", "criteria 2"]
+    }
+  ]
+}`;
 
         const Mermaid = ({ chart, id }) => {
           const ref = useRef(null);
@@ -176,6 +198,23 @@ Output must be ONLY a valid JSON object.`;
           };
           
           const sanitizeInput = (text) => text?.replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-").replace(/\u2026/g, "...").replace(/\u00A0/g, " ").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "") || "";
+
+          // --- Robust JSON Extractor for Conversational Models ---
+          const extractJSON = (text) => {
+              if (!text) throw new Error("Empty response received.");
+              
+              // Find the outermost curly braces to safely extract JSON 
+              // This completely avoids Regex backtick bugs in Babel standalone
+              const start = text.indexOf('{');
+              const end = text.lastIndexOf('}');
+              
+              if (start === -1 || end === -1) {
+                  throw new Error("No valid JSON structure found in the AI response.");
+              }
+              
+              const cleanString = text.slice(start, end + 1);
+              return JSON.parse(cleanString);
+          };
 
           const openFlowExplorer = () => {
               setZoomLevel(1);
@@ -356,48 +395,55 @@ Output must be ONLY a valid JSON object.`;
                   body: JSON.stringify({ 
                     contents: [{ parts: [{ text: promptContext }] }], 
                     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, 
-                    generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
+                    generationConfig: { temperature: 0.1 } 
                   })
                 });
 
                 if (!response.ok) {
                   const errPayload = await response.json().catch(() => ({}));
-                  console.error("AI Generation Rejected:", errPayload);
-
-                  if ((response.status === 429 || response.status >= 500) && attempt < 5) {
-                    const delay = Math.pow(2, attempt) * 1000;
-                    await new Promise(r => setTimeout(r, delay));
-                    return callAiWithRetry(attempt + 1);
-                  }
-                  if (response.status === 400 || response.status === 403 || response.status === 404) {
-                      setModalError(`API Error (${response.status}): ${errPayload?.error?.message || 'Model may not support JSON mode or is invalid.'}`);
-                      setShowApiModal(true);
-                      throw new Error(`API Key or Model invalid (${response.status}). Details: ${errPayload?.error?.message || 'Check model version or key'}`);
-                  }
-                  throw new Error(`AI Gateway Error (${response.status}): ${errPayload?.error?.message || 'Unknown network error'}`);
+                  const errMsg = errPayload?.error?.message || 'Unknown network error';
+                  const err = new Error(errMsg);
+                  err.status = response.status;
+                  throw err;
                 }
 
                 const data = await response.json();
                 const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
                 
                 if (!rawContent) {
-                    throw new Error("AI returned an empty response. It may have been blocked by safety filters.");
+                    const err = new Error("AI returned an empty response. It may have been blocked by safety filters.");
+                    err.isParsingError = true;
+                    throw err;
                 }
 
-                const match = rawContent.match(/\{[\s\S]*\}/);
-                if (match) {
-                  const parsedResult = JSON.parse(match[0]);
+                try {
+                  const parsedResult = extractJSON(rawContent);
                   await updateModuleData(activeModuleId, { result: parsedResult }, 'Deep AI Scribed');
                   setActiveSpecIndex(0); 
                   setWorkspaceTab('blueprint');
-                } else {
-                  throw new Error("AI output was not in the expected JSON format. The selected Lite model may not support structured output. Please refine the text or change models.");
+                  return; 
+                } catch (parseErr) {
+                  console.error("RAW AI OUTPUT:", rawContent);
+                  const err = new Error(`AI generated malformed JSON data. The preview model included conversational text that broke parsing. Details: ${parseErr.message}`);
+                  err.isParsingError = true;
+                  throw err;
                 }
               } catch (err) {
-                if (attempt < 5 && !err.message.includes("API Key") && !err.message.includes("API Error") && !err.message.includes("Safety") && !err.message.includes("format") && !err.message.includes("invalid")) {
+                // Retry safely without exponential storms
+                if (attempt < 5 && (err.status === 429 || (err.status >= 500 && err.status < 600) || !err.status) && !err.isParsingError) {
                   const delay = Math.pow(2, attempt) * 1000;
+                  console.warn(`Retry attempt ${attempt + 1} after ${delay}ms for model generation...`);
                   await new Promise(r => setTimeout(r, delay));
                   return callAiWithRetry(attempt + 1);
+                }
+
+                if (err.status === 503 || err.status === 500) {
+                    throw new Error("Google's AI servers are currently experiencing extreme demand (Error 503). Please wait a few moments and try again, or switch to a different model in the API Settings.");
+                }
+                if (err.status === 400 || err.status === 403 || err.status === 404) {
+                    setModalError(`API Error (${err.status}): ${err.message}`);
+                    setShowApiModal(true);
+                    throw new Error("Invalid API Key or Model access denied. Check your settings.");
                 }
                 throw err;
               }
@@ -442,43 +488,45 @@ Output must be ONLY a valid JSON object.`;
                   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${keyToUse}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" }})
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: "Output ONLY a valid JSON object." }] }, generationConfig: { temperature: 0.1 }})
                   });
                   
                   if (!res.ok) {
                       const errPayload = await res.json().catch(() => ({}));
-                      console.error("AI Sync Error:", errPayload);
-                      
-                      if ((res.status === 429 || res.status >= 500) && attempt < 5) {
-                          const delay = Math.pow(2, attempt) * 1000;
-                          await new Promise(r => setTimeout(r, delay));
-                          return callAiWithRetry(attempt + 1);
-                      }
-                      if (res.status === 400 || res.status === 403 || res.status === 404) {
-                          setModalError(`API Error (${res.status}): ${errPayload?.error?.message || 'Model may not support JSON mode.'}`);
-                          setShowApiModal(true);
-                          throw new Error("Invalid API Key or Model access denied.");
-                      }
-                      throw new Error("API Request Failed");
+                      const err = new Error(errPayload?.error?.message || "API Request Failed");
+                      err.status = res.status;
+                      throw err;
                   }
                   
                   const data = await res.json();
-                  const match = data.candidates?.[0]?.content?.parts?.[0]?.text?.match(/\{[\s\S]*\}/);
-                  if (match) {
-                    const synced = JSON.parse(match[0]);
-                    const newBuffer = {...editBuffer};
-                    newBuffer.specs[activeSpecIndex].data_fields = synced.data_fields || [];
-                    newBuffer.specs[activeSpecIndex].acceptance_criteria = synced.acceptance_criteria || [];
-                    newBuffer.specs[activeSpecIndex].flowchart_mermaid = synced.flowchart_mermaid || currentSpec.flowchart_mermaid;
-                    setEditBuffer(newBuffer);
+                  const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                  
+                  if (rawContent) {
+                    try {
+                      const synced = extractJSON(rawContent);
+                      const newBuffer = {...editBuffer};
+                      newBuffer.specs[activeSpecIndex].data_fields = synced.data_fields || [];
+                      newBuffer.specs[activeSpecIndex].acceptance_criteria = synced.acceptance_criteria || [];
+                      newBuffer.specs[activeSpecIndex].flowchart_mermaid = synced.flowchart_mermaid || currentSpec.flowchart_mermaid;
+                      setEditBuffer(newBuffer);
+                    } catch (e) {
+                      console.error("Sync parsing failed. RAW OUTPUT:", rawContent, e);
+                    }
                   }
                 } catch (err) {
-                    if (attempt < 5 && !err.message.includes("API")) {
+                    if (attempt < 5 && (err.status === 429 || (err.status >= 500 && err.status < 600) || !err.status)) {
                         const delay = Math.pow(2, attempt) * 1000;
                         await new Promise(r => setTimeout(r, delay));
                         return callAiWithRetry(attempt + 1);
                     }
-                    console.error(err);
+                    if (err.status === 503 || err.status === 500) {
+                        setModalError("Google AI servers are overloaded (Error 503). Please wait and try again.");
+                        setShowApiModal(true);
+                    } else if (err.status === 400 || err.status === 403 || err.status === 404) {
+                        setModalError(`API Error (${err.status}): ${err.message}`);
+                        setShowApiModal(true);
+                    }
+                    console.error("Sync Error:", err);
                 }
             };
             
@@ -506,19 +554,9 @@ Output must be ONLY a valid JSON object.`;
                   
                   if (!res.ok) {
                       const errPayload = await res.json().catch(() => ({}));
-                      console.error("AI Refinement Error:", errPayload);
-                      
-                      if ((res.status === 429 || res.status >= 500) && attempt < 5) {
-                          const delay = Math.pow(2, attempt) * 1000;
-                          await new Promise(r => setTimeout(r, delay));
-                          return callAiWithRetry(attempt + 1);
-                      }
-                      if (res.status === 400 || res.status === 403 || res.status === 404) {
-                          setModalError(`API Error (${res.status}): ${errPayload?.error?.message || 'Model access denied.'}`);
-                          setShowApiModal(true);
-                          throw new Error("Invalid API Key or Model access denied.");
-                      }
-                      throw new Error("API Request Failed");
+                      const err = new Error(errPayload?.error?.message || "API Request Failed");
+                      err.status = res.status;
+                      throw err;
                   }
                   
                   const data = await res.json();
@@ -530,12 +568,19 @@ Output must be ONLY a valid JSON object.`;
                     setAiRefinementInput("");
                   }
                 } catch (err) {
-                    if (attempt < 5 && !err.message.includes("API")) {
+                    if (attempt < 5 && (err.status === 429 || (err.status >= 500 && err.status < 600) || !err.status)) {
                         const delay = Math.pow(2, attempt) * 1000;
                         await new Promise(r => setTimeout(r, delay));
                         return callAiWithRetry(attempt + 1);
                     }
-                    console.error(err);
+                    if (err.status === 503 || err.status === 500) {
+                        setModalError("Google AI servers are overloaded (Error 503). Please wait and try again.");
+                        setShowApiModal(true);
+                    } else if (err.status === 400 || err.status === 403 || err.status === 404) {
+                        setModalError(`API Error (${err.status}): ${err.message}`);
+                        setShowApiModal(true);
+                    }
+                    console.error("Refinement Error:", err);
                 }
             };
             
@@ -1232,6 +1277,7 @@ Output must be ONLY a valid JSON object.`;
                                           availableModels.map(m => <option key={m} value={m}>{m}</option>)
                                       ) : (
                                           <>
+                                              <option value="gemini-3-flash-preview">Gemini 3 Flash Preview (Experimental)</option>
                                               <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast & Default)</option>
                                               <option value="gemini-2.5-pro">Gemini 2.5 Pro (Advanced Logic)</option>
                                               <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash Latest</option>
